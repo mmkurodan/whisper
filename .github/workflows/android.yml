@@ -68,7 +68,12 @@ jobs:
         echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
         echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
+        # sdkmanager exits after reading enough input, which closes the pipe and
+        # makes `yes` exit with SIGPIPE. Disable pipefail just for this command
+        # so genuine sdkmanager failures still stop the step.
+        set +o pipefail
         yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+        set -o pipefail
         "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
           "platforms;android-35" \
           "build-tools;35.0.0" \
