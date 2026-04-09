@@ -20,15 +20,60 @@ jobs:
     - name: Generate Gradle Wrapper (8.7)
       run: gradle wrapper --gradle-version 8.7
 
-    - name: Install Android NDK and CMake
-      env:
-        ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-        ANDROID_HOME: ${{ env.ANDROID_HOME }}
+    - name: Install Android SDK components
       run: |
-        SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-        SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-        yes | "$SDKMANAGER" --licenses >/dev/null
-        "$SDKMANAGER" "ndk;27.2.12479018" "cmake;3.22.1"
+        set -euo pipefail
+
+        SDK_ROOT=""
+        for candidate in \
+          "${ANDROID_SDK_ROOT:-}" \
+          "${ANDROID_HOME:-}" \
+          "/usr/local/lib/android/sdk" \
+          "/opt/android-sdk" \
+          "$HOME/android-sdk" \
+          "$HOME/Android/Sdk"
+        do
+          if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+            SDK_ROOT="$candidate"
+            break
+          fi
+        done
+
+        if [ -z "$SDK_ROOT" ]; then
+          echo "Android SDK not found." >&2
+          exit 1
+        fi
+
+        SDKMANAGER=""
+        for candidate in \
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+          "$SDK_ROOT/cmdline-tools/bin/sdkmanager" \
+          "$SDK_ROOT/tools/bin/sdkmanager"
+        do
+          if [ -x "$candidate" ]; then
+            SDKMANAGER="$candidate"
+            break
+          fi
+        done
+
+        if [ -z "$SDKMANAGER" ] && [ -d "$SDK_ROOT/cmdline-tools" ]; then
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -mindepth 2 -maxdepth 2 -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
+        fi
+
+        if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+          echo "sdkmanager not found under $SDK_ROOT" >&2
+          exit 1
+        fi
+
+        echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+        echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+
+        yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+        "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
+          "platforms;android-35" \
+          "build-tools;35.0.0" \
+          "ndk;27.2.12479018" \
+          "cmake;3.22.1"
 
     - name: Build with Gradle
       run: ./gradlew assembleDebug
