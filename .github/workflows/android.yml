@@ -1,0 +1,30 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Download Gradle 8.7
+      run: |
+        wget https://services.gradle.org/distributions/gradle-8.7-bin.zip
+        unzip gradle-8.7-bin.zip
+        echo "$PWD/gradle-8.7/bin" >> $GITHUB_PATH
+
+    - name: Generate Gradle Wrapper (8.7)
+      run: gradle wrapper --gradle-version 8.7
+
+    - name: Build with Gradle
+      run: ./gradlew assembleDebug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: app/build/outputs/apk/debug/app-debug.apk
