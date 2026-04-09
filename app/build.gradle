@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+configurations.configureEach {
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+}
+
 android {
     namespace "com.micklab.whisper"
     compileSdk 35
@@ -12,6 +17,16 @@ android {
         targetSdk 35
         versionCode 1
         versionName "1.0"
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
     }
 
     buildTypes {
@@ -19,7 +34,29 @@ android {
             minifyEnabled false
         }
     }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    ndkVersion "27.2.12479018"
+
+    externalNativeBuild {
+        cmake {
+            path file("src/main/jni/whisper/CMakeLists.txt")
+            version "3.22.1"
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+    }
 }
 
 dependencies {
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
 }

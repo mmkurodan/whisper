@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Whisper" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>

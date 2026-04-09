@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">Whisper文字起こし</string>
+    <string name="app_title">Whisper 日本語文字起こし</string>
+    <string name="app_description">指定された GGUF モデルを端末へ保存し、録音した音声を日本語で文字起こしします。初回はモデルのダウンロードに時間がかかります。</string>
+    <string name="model_label">使用モデル</string>
+    <string name="model_not_downloaded">モデルはまだ端末に保存されていません。</string>
+    <string name="model_ready_status">モデルの準備ができました。録音を開始できます。</string>
+    <string name="model_required">先にモデルをダウンロードしてください。</string>
+    <string name="download_model">モデルをダウンロード</string>
+    <string name="redownload_model">モデルを再ダウンロード</string>
+    <string name="start_recording">録音を開始</string>
+    <string name="stop_recording">録音を停止して文字起こし</string>
+    <string name="recording_status">録音中です。もう一度押すと文字起こしを開始します。</string>
+    <string name="permission_required">マイク権限がないため録音できません。</string>
+    <string name="transcribing_status">文字起こし中です。完了までお待ちください。</string>
+    <string name="transcript_title">文字起こし結果</string>
+    <string name="transcript_placeholder">ここに日本語の文字起こし結果が表示されます。</string>
+    <string name="empty_transcript">音声は認識されませんでした。</string>
+    <string name="recording_too_short">音声が録音されていません。</string>
+    <string name="transcribe_complete">文字起こしが完了しました（録音時間 %1$s）。</string>
+    <string name="model_download_progress">モデルをダウンロード中… %1$s / %2$s</string>
+    <string name="model_download_progress_unknown">モデルをダウンロード中… %1$s</string>
+</resources>

@@ -20,6 +20,16 @@ jobs:
     - name: Generate Gradle Wrapper (8.7)
       run: gradle wrapper --gradle-version 8.7
 
+    - name: Install Android NDK and CMake
+      env:
+        ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+        ANDROID_HOME: ${{ env.ANDROID_HOME }}
+      run: |
+        SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+        SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$SDKMANAGER" --licenses >/dev/null
+        "$SDKMANAGER" "ndk;27.2.12479018" "cmake;3.22.1"
+
     - name: Build with Gradle
       run: ./gradlew assembleDebug
 
