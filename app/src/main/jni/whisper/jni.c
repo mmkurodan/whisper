@@ -14,6 +14,9 @@
 #define TAG "WhisperJni"
 #define RESULT_TIMEOUT   -2
 #define RESULT_CANCELLED -3
+#define MIN_AUDIO_CONTEXT 256
+#define AUDIO_CONTEXT_GRANULARITY 32
+#define AUDIO_CONTEXT_PADDING_FRAMES 100
 
 static JavaVM *g_java_vm = NULL;
 static jclass g_whisper_jni_class = NULL;
@@ -59,6 +62,48 @@ static int64_t now_monotonic_ms(void) {
     struct timespec spec;
     clock_gettime(CLOCK_MONOTONIC, &spec);
     return ((int64_t) spec.tv_sec * 1000LL) + ((int64_t) spec.tv_nsec / 1000000LL);
+}
+
+static int clamp_int(int value, int min_value, int max_value) {
+    if (value < min_value) {
+        return min_value;
+    }
+    if (value > max_value) {
+        return max_value;
+    }
+    return value;
+}
+
+static int round_up_to_multiple(int value, int multiple) {
+    if (multiple <= 1) {
+        return value;
+    }
+    return ((value + multiple - 1) / multiple) * multiple;
+}
+
+static int recommended_audio_context(struct whisper_context *context, int audio_length_samples) {
+    if (context == NULL) {
+        return 0;
+    }
+
+    const int max_audio_context = whisper_n_audio_ctx(context);
+    if (max_audio_context <= 0) {
+        return 0;
+    }
+
+    const int audio_frames =
+            (audio_length_samples + WHISPER_HOP_LENGTH - 1) / WHISPER_HOP_LENGTH;
+    const int padded_audio_frames = audio_frames + AUDIO_CONTEXT_PADDING_FRAMES;
+    const int required_audio_context = (padded_audio_frames + 1) / 2;
+    const int minimum_audio_context = max_audio_context < MIN_AUDIO_CONTEXT
+            ? max_audio_context
+            : MIN_AUDIO_CONTEXT;
+
+    return clamp_int(
+            round_up_to_multiple(required_audio_context, AUDIO_CONTEXT_GRANULARITY),
+            minimum_audio_context,
+            max_audio_context
+    );
 }
 
 static void dispatch_native_log(enum ggml_log_level level, const char *text) {
@@ -429,6 +474,11 @@ Java_com_micklab_whisper_WhisperJni_fullTranscribe(
     }
 
     const jsize audio_length = (*env)->GetArrayLength(env, audio_data);
+    const int max_audio_context = whisper_n_audio_ctx(context);
+    const int recommended_audio_context_value =
+            recommended_audio_context(context, audio_length);
+    const int audio_frames =
+            ((int) audio_length + WHISPER_HOP_LENGTH - 1) / WHISPER_HOP_LENGTH;
     const char *language_chars = NULL;
     const char *language = "ja";
     if (language_str != NULL) {
@@ -454,6 +504,7 @@ Java_com_micklab_whisper_WhisperJni_fullTranscribe(
     params.temperature = 0.0f;
     params.temperature_inc = 0.0f;
     params.greedy.best_of = 1;
+    params.audio_ctx = recommended_audio_context_value;
 
     struct transcribe_run_state run_state = {
             .context = context,
@@ -476,14 +527,17 @@ Java_com_micklab_whisper_WhisperJni_fullTranscribe(
     set_cancel_requested(context, false);
     dispatch_native_logf(
             GGML_LOG_LEVEL_INFO,
-            "whisper_full start: samples=%d seconds=%.2f threads=%d timeout_ms=%d language=%s timestamps=%s best_of=%d",
+            "whisper_full start: samples=%d seconds=%.2f frames=%d threads=%d timeout_ms=%d language=%s timestamps=%s best_of=%d audio_ctx=%d/%d",
             (int) audio_length,
             (double) audio_length / (double) WHISPER_SAMPLE_RATE,
+            audio_frames,
             params.n_threads,
             run_state.timeout_ms,
             language,
             include_timestamps == JNI_TRUE ? "true" : "false",
-            params.greedy.best_of
+            params.greedy.best_of,
+            params.audio_ctx,
+            max_audio_context
     );
 
     whisper_reset_timings(context);
