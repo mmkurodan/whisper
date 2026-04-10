@@ -4,7 +4,6 @@ import android.annotation.SuppressLint;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -17,6 +16,8 @@ final class AudioRecorder {
     private static final String TAG = "AudioRecorder";
     private static final int CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO;
     private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
+    private static final long EMPTY_READ_SLEEP_MS = 10L;
+    private static final long STOP_TIMEOUT_MS = 2_000L;
 
     private final Object dataLock = new Object();
     private final AtomicBoolean isRecording = new AtomicBoolean(false);
@@ -34,6 +35,7 @@ final class AudioRecorder {
         }
 
         clearCapturedAudio();
+        recordingError = null;
 
         int minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT);
         if (minBufferSize <= 0) {
@@ -57,6 +59,7 @@ final class AudioRecorder {
         audioRecord = localRecord;
         isRecording.set(true);
         localRecord.startRecording();
+        AppLogger.i(TAG, "録音を開始しました: minBuffer=" + minBufferSize + ", buffer=" + bufferSize);
 
         Thread localThread = new Thread(this::captureLoop, "WhisperRecorder");
         recordingThread = localThread;
@@ -72,9 +75,7 @@ final class AudioRecorder {
 
         AudioRecord localRecord = audioRecord;
         audioRecord = null;
-        if (localRecord != null && localRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
-            localRecord.stop();
-        }
+        stopAudioRecord(localRecord, false);
 
         joinRecordingThread();
 
@@ -90,6 +91,11 @@ final class AudioRecorder {
         }
 
         float[] result = toFloatArray();
+        AppLogger.i(
+                TAG,
+                "録音を停止しました: samples=" + result.length
+                        + ", durationMs=" + ((result.length * 1_000L) / SAMPLE_RATE)
+        );
         clearCapturedAudio();
         return result;
     }
@@ -99,9 +105,7 @@ final class AudioRecorder {
 
         AudioRecord localRecord = audioRecord;
         audioRecord = null;
-        if (localRecord != null && localRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
-            localRecord.stop();
-        }
+        stopAudioRecord(localRecord, true);
 
         joinRecordingThreadQuietly();
 
@@ -120,8 +124,9 @@ final class AudioRecorder {
         }
 
         short[] buffer = new short[2048];
-        while (isRecording.get()) {
-            int read = localRecord.read(buffer, 0, buffer.length);
+        while (true) {
+            boolean keepRecording = isRecording.get();
+            int read = localRecord.read(buffer, 0, buffer.length, AudioRecord.READ_NON_BLOCKING);
             if (read > 0) {
                 synchronized (dataLock) {
                     recordedChunks.add(Arrays.copyOf(buffer, read));
@@ -130,12 +135,21 @@ final class AudioRecorder {
                 continue;
             }
 
-            if (!isRecording.get()) {
+            if (!keepRecording) {
                 break;
             }
 
+            if (read == 0) {
+                if (!sleepBetweenReads()) {
+                    break;
+                }
+                continue;
+            }
+
+            AppLogger.e(TAG, "音声の読み取りに失敗しました: code=" + read);
             recordingError = new IllegalStateException("音声の読み取りに失敗しました: " + read);
             isRecording.set(false);
+            break;
         }
     }
 
@@ -167,7 +181,11 @@ final class AudioRecorder {
         }
 
         try {
-            localThread.join();
+            localThread.join(STOP_TIMEOUT_MS);
+            if (localThread.isAlive()) {
+                localThread.interrupt();
+                throw new IllegalStateException("録音スレッドの停止がタイムアウトしました。");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("録音スレッドの停止に失敗しました。", e);
@@ -182,10 +200,43 @@ final class AudioRecorder {
         }
 
         try {
-            localThread.join();
+            localThread.join(STOP_TIMEOUT_MS);
+            if (localThread.isAlive()) {
+                localThread.interrupt();
+                AppLogger.w(TAG, "録音スレッドが停止時間内に終了しませんでした。");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            Log.w(TAG, "Interrupted while stopping recorder", e);
+            AppLogger.w(TAG, "録音スレッド停止待ち中に割り込まれました。", e);
+        }
+    }
+
+    private boolean sleepBetweenReads() {
+        try {
+            Thread.sleep(EMPTY_READ_SLEEP_MS);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            if (isRecording.get()) {
+                recordingError = new IllegalStateException("録音スレッドが中断されました。", e);
+                isRecording.set(false);
+            }
+            return false;
+        }
+    }
+
+    private void stopAudioRecord(AudioRecord localRecord, boolean suppressErrors) {
+        if (localRecord == null || localRecord.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+            return;
+        }
+
+        try {
+            localRecord.stop();
+        } catch (IllegalStateException e) {
+            if (!suppressErrors) {
+                throw new IllegalStateException("録音を停止できません。", e);
+            }
+            AppLogger.w(TAG, "録音停止中に例外が発生しました。", e);
         }
     }
 }

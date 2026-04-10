@@ -9,6 +9,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 final class ModelDownloader {
+    private static final String TAG = "ModelDownloader";
+
     interface ProgressListener {
         void onProgress(long downloadedBytes, long totalBytes);
     }
@@ -24,6 +26,9 @@ final class ModelDownloader {
 
         File tempFile = new File(parentDirectory, destinationFile.getName() + ".part");
         boolean success = false;
+        int lastLoggedPercent = -1;
+
+        AppLogger.i(TAG, "モデルダウンロード開始: " + urlString);
 
         HttpURLConnection connection = (HttpURLConnection) new URL(urlString).openConnection();
         connection.setInstanceFollowRedirects(true);
@@ -40,6 +45,7 @@ final class ModelDownloader {
             }
 
             long totalBytes = connection.getContentLengthLong();
+            AppLogger.i(TAG, "ダウンロード応答: HTTP " + responseCode + ", totalBytes=" + totalBytes);
             if (progressListener != null) {
                 progressListener.onProgress(0L, totalBytes);
             }
@@ -57,6 +63,17 @@ final class ModelDownloader {
                     outputStream.write(buffer, 0, read);
                     downloadedBytes += read;
 
+                    if (totalBytes > 0L) {
+                        int percent = (int) ((downloadedBytes * 100L) / totalBytes);
+                        if (percent >= lastLoggedPercent + 25 || percent == 100) {
+                            lastLoggedPercent = percent;
+                            AppLogger.i(
+                                    TAG,
+                                    "モデルダウンロード進捗: " + percent + "% (" + downloadedBytes + "/" + totalBytes + " bytes)"
+                            );
+                        }
+                    }
+
                     if (progressListener != null) {
                         progressListener.onProgress(downloadedBytes, totalBytes);
                     }
@@ -72,6 +89,7 @@ final class ModelDownloader {
             }
 
             success = true;
+            AppLogger.i(TAG, "モデルダウンロード完了: " + destinationFile.getAbsolutePath());
             return destinationFile;
         } finally {
             connection.disconnect();
