@@ -28,9 +28,12 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int REQUEST_RECORD_AUDIO = 1001;
     private static final String MODEL_URL =
-            "https://huggingface.co/oxide-lab/whisper-small-GGUF/resolve/main/whisper.cpp/whisper-small-q5_1.gguf?download=true";
-    private static final String MODEL_FILE_NAME = "whisper-small-q5_1.gguf";
-    private static final String LEGACY_MODEL_FILE_NAME = "whisper-medium-q8_0.gguf";
+            "https://huggingface.co/oxide-lab/whisper-tiny-GGUF/resolve/main/whisper.cpp/whisper-tiny-q8_0.gguf?download=true";
+    private static final String MODEL_FILE_NAME = "whisper-tiny-q8_0.gguf";
+    private static final String[] LEGACY_MODEL_FILE_NAMES = {
+            "whisper-small-q5_1.gguf",
+            "whisper-medium-q8_0.gguf"
+    };
     private static final String LANGUAGE_CODE = "ja";
 
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
@@ -49,7 +52,7 @@ public class MainActivity extends AppCompatActivity {
     private ScrollView logScrollView;
 
     private File modelFile;
-    private File legacyModelFile;
+    private File[] legacyModelFiles;
     private WhisperContext whisperContext;
     private boolean busy;
     private boolean recording;
@@ -63,7 +66,10 @@ public class MainActivity extends AppCompatActivity {
 
         File modelsDirectory = new File(getFilesDir(), "models");
         modelFile = new File(modelsDirectory, MODEL_FILE_NAME);
-        legacyModelFile = new File(modelsDirectory, LEGACY_MODEL_FILE_NAME);
+        legacyModelFiles = new File[LEGACY_MODEL_FILE_NAMES.length];
+        for (int i = 0; i < LEGACY_MODEL_FILE_NAMES.length; i++) {
+            legacyModelFiles[i] = new File(modelsDirectory, LEGACY_MODEL_FILE_NAMES[i]);
+        }
 
         downloadButton = findViewById(R.id.downloadButton);
         recordButton = findViewById(R.id.recordButton);
@@ -136,7 +142,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (!modelFile.exists()) {
-            if (legacyModelFile.exists()) {
+            if (findExistingLegacyModelFile() != null) {
                 statusText.setText(R.string.legacy_model_status);
             } else {
                 statusText.setText(R.string.model_required);
@@ -248,6 +254,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshModelInfo() {
         StringBuilder builder = new StringBuilder();
+        File legacyModelFile = findExistingLegacyModelFile();
         builder.append(MODEL_FILE_NAME)
                 .append('\n')
                 .append("保存先: ")
@@ -260,7 +267,7 @@ public class MainActivity extends AppCompatActivity {
                     .append('\n')
                     .append("状態: ")
                     .append(whisperContext == null ? "高速モデルを保存済み" : "推論準備完了");
-        } else if (legacyModelFile.exists()) {
+        } else if (legacyModelFile != null) {
             builder.append("状態: 旧モデルを検出\n")
                     .append("旧モデル: ")
                     .append(legacyModelFile.getName())
@@ -339,13 +346,26 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private CharSequence getInitialStatusText() {
+        File legacyModelFile = findExistingLegacyModelFile();
         if (modelFile.exists()) {
             return getString(R.string.model_ready_status);
         }
-        if (legacyModelFile.exists()) {
+        if (legacyModelFile != null) {
             return getString(R.string.legacy_model_status);
         }
         return getString(R.string.model_not_downloaded);
+    }
+
+    private File findExistingLegacyModelFile() {
+        if (legacyModelFiles == null) {
+            return null;
+        }
+        for (File legacyModelFile : legacyModelFiles) {
+            if (legacyModelFile.exists()) {
+                return legacyModelFile;
+            }
+        }
+        return null;
     }
 
     private void copyLogsToClipboard() {
