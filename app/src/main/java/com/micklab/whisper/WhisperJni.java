@@ -14,6 +14,10 @@ final class WhisperJni {
 
     static native long initContext(String modelPath);
 
+    static native long initState(long contextPointer);
+
+    static native void freeState(long statePointer);
+
     static native void freeContext(long contextPointer);
 
     static native void cancelTranscription(long contextPointer);
@@ -22,7 +26,17 @@ final class WhisperJni {
             long contextPointer,
             int numThreads,
             float[] audioData,
-            String language,
+            boolean includeTimestamps,
+            int timeoutMs
+    );
+
+    static native int streamTranscribe(
+            long contextPointer,
+            long statePointer,
+            int numThreads,
+            int chunkIndex,
+            long chunkStartMs,
+            float[] audioData,
             boolean includeTimestamps,
             int timeoutMs
     );
@@ -34,6 +48,14 @@ final class WhisperJni {
     static native long getTextSegmentT0(long contextPointer, int index);
 
     static native long getTextSegmentT1(long contextPointer, int index);
+
+    static native int getTextSegmentCountFromState(long statePointer);
+
+    static native String getTextSegmentFromState(long statePointer, int index);
+
+    static native long getTextSegmentT0FromState(long statePointer, int index);
+
+    static native long getTextSegmentT1FromState(long statePointer, int index);
 
     static void dispatchNativeLog(int nativeLevel, String message) {
         AppLogger.nativeLog(nativeLevel, message);

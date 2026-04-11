@@ -4249,17 +4249,56 @@ whisper_token whisper_token_transcribe(struct whisper_context * ctx) {
     return ctx->vocab.token_transcribe;
 }
 
+static whisper_timings whisper_collect_timings(const whisper_state * state) {
+    whisper_timings timings = {};
+    if (state == nullptr) {
+        return timings;
+    }
+
+    timings.mel_ms = 1e-3f * state->t_mel_us;
+    timings.sample_ms = 1e-3f * state->t_sample_us / std::max(1, state->n_sample);
+    timings.encode_ms = 1e-3f * state->t_encode_us / std::max(1, state->n_encode);
+    timings.decode_ms = 1e-3f * state->t_decode_us / std::max(1, state->n_decode);
+    timings.batchd_ms = 1e-3f * state->t_batchd_us / std::max(1, state->n_batchd);
+    timings.prompt_ms = 1e-3f * state->t_prompt_us / std::max(1, state->n_prompt);
+    return timings;
+}
+
+static void whisper_reset_state_timings(whisper_state * state) {
+    if (state == nullptr) {
+        return;
+    }
+
+    state->t_mel_us = 0;
+    state->t_sample_us = 0;
+    state->t_encode_us = 0;
+    state->t_decode_us = 0;
+    state->t_batchd_us = 0;
+    state->t_prompt_us = 0;
+
+    state->n_sample = 0;
+    state->n_encode = 0;
+    state->n_decode = 0;
+    state->n_batchd = 0;
+    state->n_prompt = 0;
+}
+
 struct whisper_timings * whisper_get_timings(struct whisper_context * ctx) {
     if (ctx->state == nullptr) {
         return nullptr;
     }
     whisper_timings * timings = new whisper_timings;
-    timings->sample_ms = 1e-3f * ctx->state->t_sample_us / std::max(1, ctx->state->n_sample);
-    timings->encode_ms = 1e-3f * ctx->state->t_encode_us / std::max(1, ctx->state->n_encode);
-    timings->decode_ms = 1e-3f * ctx->state->t_decode_us / std::max(1, ctx->state->n_decode);
-    timings->batchd_ms = 1e-3f * ctx->state->t_batchd_us / std::max(1, ctx->state->n_batchd);
-    timings->prompt_ms = 1e-3f * ctx->state->t_prompt_us / std::max(1, ctx->state->n_prompt);
+    *timings = whisper_collect_timings(ctx->state);
     return timings;
+}
+
+int whisper_get_timings_from_state(struct whisper_state * state, struct whisper_timings * timings) {
+    if (state == nullptr || timings == nullptr) {
+        return -1;
+    }
+
+    *timings = whisper_collect_timings(state);
+    return 0;
 }
 
 void whisper_print_timings(struct whisper_context * ctx) {
@@ -4289,18 +4328,12 @@ void whisper_print_timings(struct whisper_context * ctx) {
 void whisper_reset_timings(struct whisper_context * ctx) {
     ctx->t_start_us = ggml_time_us();
     if (ctx->state != nullptr) {
-        ctx->state->t_mel_us = 0;
-        ctx->state->t_sample_us = 0;
-        ctx->state->t_encode_us = 0;
-        ctx->state->t_decode_us = 0;
-        ctx->state->t_batchd_us = 0;
-        ctx->state->t_prompt_us = 0;
-        ctx->state->n_sample = 0;
-        ctx->state->n_encode = 0;
-        ctx->state->n_decode = 0;
-        ctx->state->n_batchd = 0;
-        ctx->state->n_prompt = 0;
+        whisper_reset_state_timings(ctx->state);
     }
+}
+
+void whisper_reset_timings_from_state(struct whisper_state * state) {
+    whisper_reset_state_timings(state);
 }
 
 static int whisper_has_coreml(void) {

@@ -34,11 +34,11 @@ public class MainActivity extends AppCompatActivity {
             "whisper-small-q5_1.gguf",
             "whisper-medium-q8_0.gguf"
     };
-    private static final String LANGUAGE_CODE = "ja";
 
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
     private final ModelDownloader modelDownloader = new ModelDownloader();
     private final AudioRecorder audioRecorder = new AudioRecorder();
+    private final TranscriptPostProcessor transcriptPostProcessor = new TranscriptPostProcessor();
     private final AppLogger.Listener logListener = this::scheduleLogRefresh;
 
     private Button downloadButton;
@@ -54,10 +54,11 @@ public class MainActivity extends AppCompatActivity {
     private File modelFile;
     private File[] legacyModelFiles;
     private WhisperContext whisperContext;
-    private boolean busy;
-    private boolean recording;
+    private volatile boolean busy;
+    private volatile boolean recording;
     private boolean pendingRecordingStart;
     private volatile boolean destroyed;
+    private volatile Exception streamingFailure;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -165,17 +166,86 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startRecording() {
+        resetStreamingSession();
+
         try {
-            audioRecorder.start();
+            audioRecorder.start(this::enqueueChunkTranscription);
             recording = true;
             hideProgress();
+            transcriptText.setText(R.string.transcript_placeholder);
             statusText.setText(R.string.recording_status);
             updateUiState();
-            AppLogger.i(TAG, "録音を開始しました。");
+            AppLogger.i(TAG, "録音とストリーミング字幕を開始しました。");
+
+            // 初回チャンクの待ち時間を減らすため、録音開始時点で WhisperState を先に確保します。
+            backgroundExecutor.execute(() -> {
+                try {
+                    getOrCreateContext().beginStreaming();
+                } catch (IOException e) {
+                    streamingFailure = e;
+                    AppLogger.e(TAG, "WhisperState の事前初期化に失敗しました。", e);
+                }
+            });
         } catch (IllegalStateException e) {
             AppLogger.e(TAG, "録音開始に失敗しました。", e);
             statusText.setText(getMessageOrFallback(e, R.string.permission_required));
             updateUiState();
+        }
+    }
+
+    private void enqueueChunkTranscription(AudioRecorder.StreamChunk chunk) {
+        if (destroyed) {
+            return;
+        }
+
+        backgroundExecutor.execute(() -> transcribeChunk(chunk));
+    }
+
+    private void transcribeChunk(AudioRecorder.StreamChunk chunk) {
+        if (destroyed || streamingFailure != null) {
+            return;
+        }
+
+        long startedAtMs = System.currentTimeMillis();
+        try {
+            WhisperContext.ChunkResult chunkResult = getOrCreateContext().transcribeChunk(chunk, false);
+            TranscriptPostProcessor.Snapshot snapshot = transcriptPostProcessor.appendChunk(
+                    chunkResult.chunkStartMs,
+                    chunkResult.chunkEndMs,
+                    chunkResult.transcript
+            );
+            long elapsedMs = System.currentTimeMillis() - startedAtMs;
+
+            AppLogger.i(
+                    TAG,
+                    "チャンク処理完了: chunk=" + chunkResult.chunkIndex
+                            + ", segmentCount=" + chunkResult.segmentCount
+                            + ", transcriptChars=" + snapshot.plainText.length()
+                            + ", elapsedMs=" + elapsedMs
+            );
+
+            postToUi(() -> {
+                if (destroyed) {
+                    return;
+                }
+                transcriptText.setText(
+                        snapshot.displayText.isEmpty()
+                                ? getString(R.string.transcript_placeholder)
+                                : snapshot.displayText
+                );
+                if (recording) {
+                    statusText.setText(getString(R.string.recording_streaming_status, chunkResult.chunkIndex + 1));
+                }
+                updateUiState();
+            });
+        } catch (IOException | IllegalStateException e) {
+            streamingFailure = e;
+            AppLogger.e(TAG, "ストリーミング文字起こしに失敗しました。", e);
+            postToUi(() -> {
+                if (!destroyed) {
+                    statusText.setText(getMessageOrFallback(e, R.string.transcribe_failed));
+                }
+            });
         }
     }
 
@@ -189,49 +259,80 @@ public class MainActivity extends AppCompatActivity {
         showIndeterminateProgress();
         statusText.setText(R.string.transcribing_status);
         updateUiState();
-        AppLogger.i(TAG, "録音停止と文字起こしを開始します。");
+        AppLogger.i(TAG, "録音を停止し、残りチャンクの処理を待機します。");
 
-        backgroundExecutor.execute(() -> {
-            try {
-                float[] audioSamples = audioRecorder.stopAndRead();
-                if (audioSamples.length == 0) {
-                    throw new IllegalStateException(getString(R.string.recording_too_short));
-                }
+        AudioRecorder.RecordingSummary summary;
+        try {
+            summary = audioRecorder.stop();
+        } catch (IllegalStateException e) {
+            AppLogger.e(TAG, "録音停止に失敗しました。", e);
+            busy = false;
+            hideProgress();
+            statusText.setText(getMessageOrFallback(e, R.string.transcribe_failed));
+            updateUiState();
+            return;
+        }
 
-                AppLogger.i(
-                        TAG,
-                        "音声データを取得しました: samples=" + audioSamples.length
-                                + ", duration=" + formatDuration(audioSamples.length)
-                );
-                String transcript = getOrCreateContext().transcribe(audioSamples, LANGUAGE_CODE, false);
-                String finalTranscript = transcript.isEmpty()
-                        ? getString(R.string.empty_transcript)
-                        : transcript;
-                String duration = formatDuration(audioSamples.length);
-
-                postToUi(() -> {
-                    busy = false;
-                    hideProgress();
-                    transcriptText.setText(finalTranscript);
-                    refreshModelInfo();
-                    statusText.setText(getString(R.string.transcribe_complete, duration));
-                    updateUiState();
-                });
-                AppLogger.i(TAG, "文字起こしが完了しました。");
-            } catch (IOException | IllegalStateException e) {
-                AppLogger.e(TAG, "文字起こしに失敗しました。", e);
-                postToUi(() -> {
-                    busy = false;
-                    hideProgress();
-                    refreshModelInfo();
-                    statusText.setText(getMessageOrFallback(e, R.string.transcribe_failed));
-                    updateUiState();
-                });
-            }
-        });
+        backgroundExecutor.execute(() -> finalizeStreamingTranscript(summary));
     }
 
-    private WhisperContext getOrCreateContext() throws IOException {
+    private void finalizeStreamingTranscript(AudioRecorder.RecordingSummary summary) {
+        try {
+            WhisperContext context = peekContext();
+            if (context != null) {
+                context.endStreaming();
+            }
+
+            if (summary.totalSamples == 0) {
+                throw new IllegalStateException(getString(R.string.recording_too_short));
+            }
+
+            Exception failure = streamingFailure;
+            streamingFailure = null;
+            if (failure != null) {
+                throw failure;
+            }
+
+            TranscriptPostProcessor.Snapshot snapshot = transcriptPostProcessor.snapshot();
+            String finalTranscript = snapshot.displayText.isEmpty()
+                    ? getString(R.string.empty_transcript)
+                    : snapshot.displayText;
+            String duration = formatDuration(summary.totalSamples);
+
+            AppLogger.i(
+                    TAG,
+                    "ストリーミング文字起こしが完了しました: deliveredChunks=" + summary.deliveredChunks
+                            + ", skippedSilentChunks=" + summary.skippedSilentChunks
+                            + ", droppedLowVolumeChunks=" + summary.droppedLowVolumeChunks
+                            + ", transcriptChars=" + snapshot.plainText.length()
+            );
+
+            postToUi(() -> {
+                busy = false;
+                hideProgress();
+                transcriptText.setText(finalTranscript);
+                refreshModelInfo();
+                statusText.setText(getString(
+                        R.string.transcribe_complete_streaming,
+                        duration,
+                        summary.deliveredChunks,
+                        summary.skippedSilentChunks
+                ));
+                updateUiState();
+            });
+        } catch (Exception e) {
+            AppLogger.e(TAG, "文字起こしに失敗しました。", e);
+            postToUi(() -> {
+                busy = false;
+                hideProgress();
+                refreshModelInfo();
+                statusText.setText(getMessageOrFallback(e, R.string.transcribe_failed));
+                updateUiState();
+            });
+        }
+    }
+
+    private synchronized WhisperContext getOrCreateContext() throws IOException {
         if (whisperContext == null) {
             AppLogger.i(TAG, "Whisper コンテキストを作成します。");
             whisperContext = WhisperContext.create(modelFile);
@@ -239,12 +340,21 @@ public class MainActivity extends AppCompatActivity {
         return whisperContext;
     }
 
-    private void closeWhisperContext() {
+    private synchronized WhisperContext peekContext() {
+        return whisperContext;
+    }
+
+    private synchronized void closeWhisperContext() {
         if (whisperContext != null) {
             AppLogger.i(TAG, "Whisper コンテキストを解放します。");
             whisperContext.close();
             whisperContext = null;
         }
+    }
+
+    private void resetStreamingSession() {
+        transcriptPostProcessor.reset();
+        streamingFailure = null;
     }
 
     private boolean hasAudioPermission() {
@@ -428,14 +538,13 @@ public class MainActivity extends AppCompatActivity {
         destroyed = true;
         AppLogger.i(TAG, "MainActivity を破棄します。");
         AppLogger.removeListener(logListener);
-        if (whisperContext != null) {
-            whisperContext.cancelTranscription();
+        WhisperContext context = peekContext();
+        if (context != null) {
+            context.cancelTranscription();
         }
         audioRecorder.cancel();
-        if (!busy) {
-            closeWhisperContext();
-        }
         backgroundExecutor.shutdownNow();
+        closeWhisperContext();
         super.onDestroy();
     }
 }

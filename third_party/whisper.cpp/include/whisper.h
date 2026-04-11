@@ -436,6 +436,7 @@ extern "C" {
 
     // Performance information from the default state.
     struct whisper_timings {
+        float mel_ms;
         float sample_ms;
         float encode_ms;
         float decode_ms;
@@ -443,8 +444,10 @@ extern "C" {
         float prompt_ms;
     };
     WHISPER_API struct whisper_timings * whisper_get_timings(struct whisper_context * ctx);
+    WHISPER_API int whisper_get_timings_from_state(struct whisper_state * state, struct whisper_timings * timings);
     WHISPER_API void whisper_print_timings(struct whisper_context * ctx);
     WHISPER_API void whisper_reset_timings(struct whisper_context * ctx);
+    WHISPER_API void whisper_reset_timings_from_state(struct whisper_state * state);
 
     // Print system information
     WHISPER_API const char * whisper_print_system_info(void);
